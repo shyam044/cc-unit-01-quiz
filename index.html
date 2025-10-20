@@ -103,6 +103,10 @@
       padding: 8px;
     }
   </style>
+  <!-- Firebase (compat libs for quick migration) -->
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+
 </head>
 <body>
 
@@ -354,13 +358,27 @@
 </div>
 
 <script>
-  const answers = {
-    q1: "c", q2: "b", q3: "b", q4: "c", q5: "b",
+  // --- Firebase init (paste your config here) ---
+    const firebaseConfig = {
+    apiKey: "AIzaSyCGqK9LC0yxOAbfoZQriKQgX0vScIY8k6M",
+    authDomain: "proj-581d8.firebaseapp.com",
+    projectId: "proj-581d8",
+    storageBucket: "proj-581d8.firebasestorage.app",
+    messagingSenderId: "735221529949",
+    appId: "1:735221529949:web:b46c4f3195069039477cb4",
+    measurementId: "G-TSX730V9DT"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const scoresCol = db.collection("quizScores");
+
+  // --- existing answers object remains ---
+  const answers = { q1: "c", q2: "b", q3: "b", q4: "c", q5: "b",
     q6: "c", q7: "c", q8: "b", q9: "c", q10: "c",
     q11: "d", q12: "c", q13: "a", q14: "b", q15: "c",
-    q16: "a", q17: "c", q18: "b", q19: "c", q20: "c"
-  };
+    q16: "a", q17: "c", q18: "b", q19: "c", q20: "c" };
 
+  // UI references (same as before)
   const userForm = document.getElementById("userForm");
   const quizForm = document.getElementById("quizForm");
   const startBtn = document.getElementById("startBtn");
@@ -373,28 +391,31 @@
   const rankTableContainer = document.getElementById("rankTableContainer");
   const rankTableBody = document.getElementById("rankTableBody");
 
-  startBtn.addEventListener("click", () => {
+  // START: when user clicks Start
+  startBtn.addEventListener("click", async () => {
     let username = usernameInput.value.trim().toLowerCase();
-    if (!username) {
-      alert("Please enter your name.");
+    if (!username) { alert("Please enter your name."); return; }
+
+    // Check Firestore whether this username already submitted
+    const existing = await scoresCol.where("name", "==", username).get();
+    if (!existing.empty) {
+      // user already submitted anywhere
+      userForm.classList.add("hidden");
+      alreadySubmitted.classList.remove("hidden");
       return;
     }
 
-    const submittedUsers = JSON.parse(localStorage.getItem("submittedUsers")) || [];
-    if (submittedUsers.includes(username)) {
-      userForm.classList.add("hidden");
-      alreadySubmitted.classList.remove("hidden");
-    } else {
-      localStorage.setItem("currentUser", username);
-      userForm.classList.add("hidden");
-      quizForm.classList.remove("hidden");
-    }
+    // store currentUser in local session for this browser
+    sessionStorage.setItem("currentUser", username);
+    userForm.classList.add("hidden");
+    quizForm.classList.remove("hidden");
   });
 
-  submitBtn.addEventListener("click", () => {
+  // SUBMIT: evaluate and push to Firestore
+  submitBtn.addEventListener("click", async () => {
     const totalQuestions = Object.keys(answers).length;
 
-    // Check if all questions answered
+    // Ensure all answered
     for (let i = 1; i <= totalQuestions; i++) {
       if (!document.querySelector(`input[name="q${i}"]:checked`)) {
         alert(`Please answer question ${i} before submitting.`);
@@ -405,79 +426,127 @@
     let score = 0;
     for (let i = 1; i <= totalQuestions; i++) {
       const selected = document.querySelector(`input[name="q${i}"]:checked`);
-      if (selected.value === answers[`q${i}`]) {
-        score++;
-      }
+      if (selected.value === answers[`q${i}`]) score++;
     }
 
-    const currentUser = localStorage.getItem("currentUser");
-    let submittedUsers = JSON.parse(localStorage.getItem("submittedUsers")) || [];
-    let userScores = JSON.parse(localStorage.getItem("userScores")) || [];
-
-    if (currentUser && !submittedUsers.includes(currentUser)) {
-      submittedUsers.push(currentUser);
-      userScores.push({ name: currentUser, score: score });
-      localStorage.setItem("submittedUsers", JSON.stringify(submittedUsers));
-      localStorage.setItem("userScores", JSON.stringify(userScores));
-    }
-
-    scoreDiv.textContent = `Your Score: ${score} / ${totalQuestions}`;
-    submitBtn.disabled = true;
-
-    viewLeaderboardBtn.classList.remove("hidden");
-    downloadCSVBtn.classList.remove("hidden");
-  });
-
-viewLeaderboardBtn.addEventListener("click", () => {
-  const userScores = JSON.parse(localStorage.getItem("userScores")) || [];
-  if (userScores.length === 0) {
-    alert("No scores to display.");
-    return;
-  }
-
-  userScores.sort((a, b) => b.score - a.score);
-
-  rankTableBody.innerHTML = ""; // Clear previous rows
-
-  userScores.forEach((user, index) => {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${index + 1}</td>
-      <td>${user.name}</td>
-      <td>${user.score}</td>
-    `;
-    rankTableBody.appendChild(row);
-  });
-
-  rankTableContainer.classList.remove("hidden");
-});
-
-
-  downloadCSVBtn.addEventListener("click", () => {
-    const userScores = JSON.parse(localStorage.getItem("userScores")) || [];
-
-    if (userScores.length === 0) {
-      alert("No data to export.");
+    const currentUser = sessionStorage.getItem("currentUser");
+    if (!currentUser) {
+      alert("Session lost — please reload and start again.");
       return;
     }
 
-    userScores.sort((a, b) => b.score - a.score);
+    // Save result to Firestore
+    try {
+      await scoresCol.add({
+        name: currentUser,
+        score: score,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
 
-    let csvContent = "Rank,Name,Score\n";
-    userScores.forEach((user, index) => {
-      csvContent += `${index + 1},${user.name},${user.score}\n`;
-    });
+      scoreDiv.textContent = `Your Score: ${score} / ${totalQuestions}`;
+      submitBtn.disabled = true;
+      viewLeaderboardBtn.classList.remove("hidden");
+      downloadCSVBtn.classList.remove("hidden");
+    } catch (err) {
+      console.error("Saving to Firestore failed:", err);
+      alert("Failed to save score. Check console for details.");
+    }
+  });
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "quiz_scores.csv";
-    link.click();
+  // VIEW LEADERBOARD: fetch sorted scores from Firestore
+  viewLeaderboardBtn.addEventListener("click", async () => {
+    try {
+      const snapshot = await scoresCol.orderBy("score", "desc").orderBy("timestamp", "asc").get();
+      if (snapshot.empty) {
+        alert("No scores to display.");
+        return;
+      }
+
+      rankTableBody.innerHTML = "";
+      let index = 1;
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const row = document.createElement("tr");
+        row.innerHTML = `<td>${index++}</td><td>${data.name}</td><td>${data.score}</td>`;
+        rankTableBody.appendChild(row);
+      });
+      rankTableContainer.classList.remove("hidden");
+    } catch (err) {
+      console.error("Error reading leaderboard:", err);
+      alert("Could not load leaderboard. Check console.");
+    }
+  });
+
+  // DOWNLOAD CSV: pull same snapshot and build CSV
+  downloadCSVBtn.addEventListener("click", async () => {
+    try {
+      const snapshot = await scoresCol.orderBy("score", "desc").orderBy("timestamp", "asc").get();
+      if (snapshot.empty) { alert("No data to export."); return; }
+
+      let csvContent = "Rank,Name,Score\n";
+      let idx = 1;
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        csvContent += `${idx++},${d.name},${d.score}\n`;
+      });
+
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "quiz_scores.csv";
+      link.click();
+    } catch (err) {
+      console.error("CSV download failed:", err);
+      alert("Could not download CSV. Check console.");
+    }
   });
 </script>
 
+
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
